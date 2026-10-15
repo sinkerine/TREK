@@ -105,6 +105,8 @@ export const envSchema = z.object({
   WEBAUTHN_ORIGINS: anyString,
 
   // MCP
+  MCP_DISABLE_AUTH: boolStr,
+  MCP_AUTH_USERNAME: anyString,
   MCP_SESSION_TTL: positiveNumber,
   MCP_MAX_SESSION_PER_USER: positiveNumber,
   MCP_SSE_KEEPALIVE: integer(0, Number.MAX_SAFE_INTEGER, 'must be a non-negative integer (seconds, 0 disables)'),

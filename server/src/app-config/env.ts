@@ -1,4 +1,4 @@
-import { deriveAll, type AppEnv, type RawEnv } from './derive';
+import { deriveAll, deriveMcp, type AppEnv, type RawEnv } from './derive';
 import { envSchema } from './env.schema';
 
 export type { AppEnv, RawEnv };
@@ -30,6 +30,10 @@ export function validateEnvAtBoot(raw: RawEnv = process.env as RawEnv): void {
         const key = String(issue.path[0]);
         return `  - ${key}=${JSON.stringify(raw[key])}: ${issue.message}`;
       });
+  const mcp = deriveMcp(raw);
+  if (mcp.disableAuth && mcp.authUsername === null) {
+    lines.push('  - Set MCP_AUTH_USERNAME when MCP_DISABLE_AUTH is enabled.');
+  }
   lines.push(...managedPreconditions(raw));
   if (lines.length === 0) return;
   console.error(`Invalid environment configuration:\n${lines.join('\n')}`);

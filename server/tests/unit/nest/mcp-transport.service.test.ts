@@ -27,6 +27,7 @@ import type { OauthService } from '../../../src/nest/oauth/oauth.service';
 import type { AddonsService } from '../../../src/nest/addons/addons.service';
 import type { AuditService } from '../../../src/nest/audit/audit.service';
 import type { McpRegistryService } from '../../../src/nest-mcp';
+import type { DatabaseService } from '../../../src/nest/database/database.service';
 import { IS_PUBLIC } from '../../../src/nest/auth/public.decorator';
 
 const user = { id: 7, username: 'u', email: 'u@example.com', role: 'user' as const };
@@ -43,13 +44,16 @@ function makeService(overrides: {
   const addons = { isAddonEnabled: vi.fn(() => true), ...overrides.addons } as unknown as AddonsService;
   const audit = { writeAudit: vi.fn() } as unknown as AuditService;
   const registry = { attach: vi.fn() } as unknown as McpRegistryService;
-  return { svc: new McpTransportService(auth, tokens, oauth, addons, audit, registry), auth, tokens, oauth, addons, audit };
+  return { svc: new McpTransportService(auth, tokens, oauth, addons, audit, registry, {} as DatabaseService), auth, tokens, oauth, addons, audit };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('MCP_DISABLE_AUTH', 'false');
   h.getMcpSafeUrl.mockReturnValue('https://trek.example.test');
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('jsonRpcError', () => {
   it('MCPT-001: shapes a valid JSON-RPC 2.0 error frame', () => {

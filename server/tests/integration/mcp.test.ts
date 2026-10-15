@@ -50,7 +50,7 @@ import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
 import { runMigrations } from '../../src/db/migrations';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
-import { createUser } from '../helpers/factories';
+import { createUser, createTrip } from '../helpers/factories';
 import { generateToken } from '../helpers/auth';
 import { createMcpToken } from '../helpers/factories';
 import { closeMcpSessions } from '../../src/mcp/index';
@@ -128,6 +128,148 @@ describe('MCP authentication', () => {
       .delete('/mcp')
       .set('Mcp-Session-Id', 'fake-session-id');
     expect(res.status).toBe(403);
+  });
+});
+
+describe('MCP trusted-network mode', () => {
+  beforeEach(() => {
+    vi.stubEnv('MCP_DISABLE_AUTH', 'true');
+    vi.stubEnv('MCP_AUTH_USERNAME', '');
+    testDb.prepare("UPDATE addons SET enabled = 1 WHERE id = 'mcp'").run();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    closeMcpSessions();
+  });
+
+  async function initialize(authorization?: string) {
+    const req = request(app).post('/mcp').set('Accept', 'application/json, text/event-stream');
+    if (authorization) req.set('Authorization', authorization);
+    return req.send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'lan-test', version: '1' },
+    } });
+  }
+
+  it('initializes, calls tools as the configured user, audits and deletes without credentials', async () => {
+    const { user } = createUser(testDb);
+    const other = createUser(testDb).user;
+    createTrip(testDb, user.id, { title: 'LAN visible trip' });
+    createTrip(testDb, other.id, { title: 'Other private trip' });
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    const init = await initialize();
+    expect(init.status).toBe(200);
+    expect(init.headers['www-authenticate']).toBeUndefined();
+    const sid = init.headers['mcp-session-id'];
+    expect(sessions.get(sid)?.userId).toBe(user.id);
+    expect(sessions.get(sid)?.scopes).toBeNull();
+    const call = await request(app).post('/mcp')
+      .set('Mcp-Session-Id', sid).set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', method: 'tools/call', id: 2, params: { name: 'list_trips', arguments: {} } });
+    expect(call.status).toBe(200);
+    expect(call.text).toContain('LAN visible trip');
+    expect(call.text).not.toContain('Other private trip');
+    expect(call.text).not.toContain('Deprecated authentication');
+    const audit = testDb.prepare("SELECT user_id, details FROM audit_log WHERE action = 'mcp.tool_call'").get() as { user_id: number; details: string };
+    expect(audit.user_id).toBe(user.id);
+    expect(JSON.parse(audit.details)).toEqual({ clientId: 'native', authMethod: 'disabled' });
+    const deleted = await request(app).delete('/mcp').set('Mcp-Session-Id', sid);
+    expect(deleted.status).toBe(200);
+    expect(sessions.has(sid)).toBe(false);
+  });
+
+  it('uses an exact username for initialization and tool calls', async () => {
+    const { user } = createUser(testDb, { username: 'LanOwner' });
+    createTrip(testDb, user.id, { title: 'Username selected trip' });
+    vi.stubEnv('MCP_AUTH_USERNAME', 'LanOwner');
+    const init = await initialize();
+    expect(init.status).toBe(200);
+    const sid = init.headers['mcp-session-id'];
+    expect(sessions.get(sid)?.userId).toBe(user.id);
+    const call = await request(app).post('/mcp')
+      .set('Mcp-Session-Id', sid).set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', method: 'tools/call', id: 2, params: { name: 'list_trips', arguments: {} } });
+    expect(call.status).toBe(200);
+    expect(call.text).toContain('Username selected trip');
+    vi.stubEnv('MCP_AUTH_USERNAME', 'lanowner');
+    expect((await initialize()).status).toBe(503);
+    vi.stubEnv('MCP_AUTH_USERNAME', 'LanOwner');
+    testDb.prepare('UPDATE users SET is_guest = 1 WHERE id = ?').run(user.id);
+    expect((await initialize()).status).toBe(503);
+  });
+
+  it.each(['Bearer invalid', 'Basic ignored', 'other-user'])('ignores Authorization %s', async (header) => {
+    const { user } = createUser(testDb);
+    const other = createUser(testDb).user;
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    const init = await initialize(header === 'other-user' ? `Bearer ${generateToken(other.id)}` : header);
+    expect(init.status).toBe(200);
+    expect(sessions.get(init.headers['mcp-session-id'])?.userId).toBe(user.id);
+  });
+
+  it.each(['', '   ', 'unknown-user', "' OR 1=1 --"])('refuses missing or unknown username %s', async (username) => {
+    vi.stubEnv('MCP_AUTH_USERNAME', username);
+    const init = await initialize();
+    expect(init.status).toBe(503);
+    expect(init.headers['www-authenticate']).toBeUndefined();
+  });
+
+  it('refuses guest identities and rechecks the user on resumed requests', async () => {
+    const { user } = createUser(testDb);
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    const init = await initialize();
+    expect(init.status).toBe(200);
+    testDb.prepare('UPDATE users SET is_guest = 1 WHERE id = ?').run(user.id);
+    expect((await request(app).delete('/mcp').set('Mcp-Session-Id', init.headers['mcp-session-id'])).status).toBe(503);
+    expect((await initialize()).status).toBe(503);
+  });
+
+  it('keeps the addon gate and hides OAuth discovery', async () => {
+    const { user } = createUser(testDb);
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    for (const path of ['/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/mcp']) {
+      expect((await request(app).get(path)).status).toBe(404);
+    }
+    testDb.prepare("UPDATE addons SET enabled = 0 WHERE id = 'mcp'").run();
+    expect((await initialize()).status).toBe(403);
+  });
+
+  it.each(['https://evil.example', 'null', 'http://localhost:3001'])('rejects browser Origin %s in trusted mode', async (origin) => {
+    const { user } = createUser(testDb);
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    const sid = (await initialize()).headers['mcp-session-id'];
+    const init = await request(app).post('/mcp').set('Origin', origin).send({});
+    expect(init.status).toBe(403);
+    const resumed = await request(app).delete('/mcp').set('Origin', origin).set('Mcp-Session-Id', sid);
+    expect(resumed.status).toBe(403);
+    expect(sessions.has(sid)).toBe(true);
+  });
+
+  it('keeps authenticated browser access and rejects authenticated sessions after enabling bypass', async () => {
+    const { user } = createUser(testDb);
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    vi.stubEnv('MCP_DISABLE_AUTH', 'false');
+    const init = await request(app).post('/mcp')
+      .set('Origin', 'https://client.example').set('Authorization', `Bearer ${generateToken(user.id)}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', method: 'initialize', id: 1, params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'browser', version: '1' },
+      } });
+    expect(init.status).toBe(200);
+    vi.stubEnv('MCP_DISABLE_AUTH', 'true');
+    const resumed = await request(app).delete('/mcp').set('Mcp-Session-Id', init.headers['mcp-session-id']);
+    expect(resumed.status).toBe(403);
+    expect(resumed.body.error).toContain('authentication mode changed');
+  });
+
+  it('requires credentials again when disabled and rejects sessions from another auth mode', async () => {
+    const { user } = createUser(testDb);
+    vi.stubEnv('MCP_AUTH_USERNAME', user.username);
+    const init = await initialize();
+    const sid = init.headers['mcp-session-id'];
+    vi.stubEnv('MCP_DISABLE_AUTH', 'false');
+    expect((await request(app).delete('/mcp').set('Mcp-Session-Id', sid)).status).toBe(401);
+    expect((await request(app).delete('/mcp').set('Mcp-Session-Id', sid)
+      .set('Authorization', `Bearer ${generateToken(user.id)}`)).status).toBe(403);
   });
 });
 

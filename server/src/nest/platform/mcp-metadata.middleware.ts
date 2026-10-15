@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import { DiscoveryMetadataService } from './discovery-metadata.service';
 import { AddonsService } from '../addons/addons.service';
 import { ADDON_IDS } from '../../addons';
+import { readEnv } from '../../app-config';
 
 /**
  * The SDK discovery router plus its addon gate: 404 (empty body) on every
@@ -24,7 +25,8 @@ export function createMcpMetadataMiddleware(
   addons: AddonsService,
 ): RequestHandler {
   return (req, res, next) => {
-    if (req.path.startsWith('/.well-known/') && !addons.isAddonEnabled(ADDON_IDS.MCP)) {
+    if (req.path.startsWith('/.well-known/') &&
+      (!addons.isAddonEnabled(ADDON_IDS.MCP) || readEnv().mcp.disableAuth)) {
       res.status(404).end();
       return;
     }

@@ -243,6 +243,8 @@ For setup instructions, see [MCP-Overview](MCP-Overview).
 
 | Variable                   | Description                                                                                             | Default |
 |----------------------------|---------------------------------------------------------------------------------------------------------|---------|
+| `MCP_DISABLE_AUTH` | Disable all credential checks on `/mcp` for a trusted LAN/Tailscale deployment. Everyone reaching the endpoint acts as `MCP_AUTH_USERNAME`; supplied credentials are ignored. Does not restrict network access or disable REST/web authentication. See [MCP Setup](MCP-Setup#trusted-lan--tailscale-no-authentication). | `false` |
+| `MCP_AUTH_USERNAME` | Exact, case-sensitive non-guest username required when `MCP_DISABLE_AUTH=true`. Tools retain this user’s permissions; unknown/deleted/guest identities return 503. | unset |
 | `MCP_RATE_LIMIT`           | Max MCP API requests per minute, counted **per user and per OAuth client** — a user connected from two MCP clients gets this budget twice. Requests made with a static `trek_` token or a session JWT carry no client and share one further bucket per user. | `300`   |
 | `MCP_MAX_SESSION_PER_USER` | Max concurrent MCP sessions per user. At the cap the user's least-recently-active session is closed to make room — requests are not rejected. | `20`    |
 | `MCP_SESSION_TTL`          | Session idle timeout in seconds (max 86400)                                                              | `3600`  |

@@ -34,6 +34,17 @@ describe('validateEnvAtBoot', () => {
     ).not.toThrow();
   });
 
+  it('requires an explicit username for MCP auth bypass', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const username of [undefined, '', '   ']) {
+      expect(() => validateEnvAtBoot({ MCP_DISABLE_AUTH: 'true', MCP_AUTH_USERNAME: username })).toThrow();
+    }
+    expect(() => validateEnvAtBoot({ MCP_DISABLE_AUTH: 'true', MCP_AUTH_USERNAME: 'LanOwner' })).not.toThrow();
+    expect(() => validateEnvAtBoot({ MCP_DISABLE_AUTH: 'true', MCP_AUTH_USERNAME: '   ' })).toThrow();
+    expect(() => validateEnvAtBoot({ MCP_DISABLE_AUTH: 'false' })).not.toThrow();
+    expect(() => validateEnvAtBoot({ MCP_DISABLE_AUTH: 'maybe' })).toThrow();
+  });
+
   it('refuses an LLM ceiling that would silently become a zero timeout', () => {
     // Both shapes pass a plain "positive number" check and then degrade into an
     // immediate abort: a fractional value floors to 0, and anything past the

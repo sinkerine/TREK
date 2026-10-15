@@ -222,6 +222,8 @@ export function deriveSmtp(raw: RawEnv) {
 
 export function deriveMcp(raw: RawEnv) {
   return {
+    disableAuth: parseBool(raw.MCP_DISABLE_AUTH) === true,
+    authUsername: raw.MCP_AUTH_USERNAME?.trim() || null,
     sessionTtlMs: resolveSessionTtlMs(raw.MCP_SESSION_TTL),
     maxSessionsPerUser: positiveIntOr(raw.MCP_MAX_SESSION_PER_USER, 20),
     sseKeepaliveMs: resolveKeepaliveMs(raw.MCP_SSE_KEEPALIVE),

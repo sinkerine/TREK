@@ -162,6 +162,17 @@ describe('deriveSmtp', () => {
 });
 
 describe('deriveMcp', () => {
+  it('requires explicit opt-in and derives the configured username', () => {
+    for (const value of [undefined, '', 'false', 'off', 'maybe']) {
+      expect(deriveMcp({ MCP_DISABLE_AUTH: value }).disableAuth).toBe(false);
+    }
+    for (const value of ['true', '1', 'ON', ' yes ']) {
+      expect(deriveMcp({ MCP_DISABLE_AUTH: value }).disableAuth).toBe(true);
+    }
+    expect(deriveMcp({}).authUsername).toBeNull();
+    expect(deriveMcp({ MCP_AUTH_USERNAME: '   ' }).authUsername).toBeNull();
+    expect(deriveMcp({ MCP_AUTH_USERNAME: ' LanOwner ' }).authUsername).toBe('LanOwner');
+  });
   it('pins the mcp/index.ts module-const parsing', () => {
     expect(deriveMcp({}).sessionTtlMs).toBe(3_600_000);
     expect(deriveMcp({ MCP_MAX_SESSION_PER_USER: '5' }).maxSessionsPerUser).toBe(5);

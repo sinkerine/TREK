@@ -6,6 +6,21 @@ This page explains how to connect an AI assistant to your TREK instance. TREK su
 
 > **Cloudflare users:** If your TREK instance is proxied through Cloudflare, Bot Fight Mode and Super Bot Fight Mode will block MCP requests from ChatGPT. Claude.ai is not affected. See [Troubleshooting → MCP requests blocked by Cloudflare WAF](Troubleshooting#mcp-requests-blocked-by-cloudflare-waf-bot-fight-mode) for the fix.
 
+## Trusted LAN / Tailscale: no authentication
+
+To connect without OAuth, tokens, or login, enable the MCP addon in TREK and set these server environment variables, then restart:
+
+```env
+MCP_DISABLE_AUTH=true
+MCP_AUTH_USERNAME=yourname
+```
+
+Replace `yourname` with the exact, case-sensitive username of the existing non-guest TREK user whose trips and permissions the connection should use. Connect your MCP client directly to `http://<LAN-or-Tailscale-address>:3001/mcp` (or your reverse proxy URL) with authentication set to none and no Authorization header. Any supplied credentials are ignored in this mode. Use a native MCP client: browser requests carrying an `Origin` header are rejected to prevent websites from using your LAN access.
+
+**Everyone who can reach this endpoint can act as the configured user.** Restrict access using your LAN firewall or Tailscale ACLs; the switch does not check the source network and also applies to any public URL exposing the same server. Web login and REST authentication are unaffected. Trip permissions, addon gates, rate limits and tool-call auditing still apply. OAuth discovery is hidden while this mode is enabled.
+
+Authentication remains enabled by default. Missing or blank usernames prevent startup when the bypass is enabled; an unknown, deleted or guest user returns 503. Set `MCP_DISABLE_AUTH=false` (or remove it) and restart to require authentication again; reconnect clients to create new sessions.
+
 ## Option A: OAuth 2.1 (recommended)
 
 OAuth 2.1 is the preferred connection method. You grant specific scopes during the consent step and no token management is required afterward — TREK issues short-lived access tokens and automatically rotates refresh tokens.

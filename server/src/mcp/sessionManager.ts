@@ -11,6 +11,8 @@ export interface McpSession {
   clientId: string | null;
   /** true when authenticated via static trek_ token — triggers deprecation prompt */
   isStaticToken: boolean;
+  /** Sessions cannot cross between authenticated and trusted-network modes. */
+  authDisabled?: boolean;
   lastActivity: number;
   /** IP of the most recent authorized request — what mcp.tool_call audit rows record */
   lastClientIp: string | null;

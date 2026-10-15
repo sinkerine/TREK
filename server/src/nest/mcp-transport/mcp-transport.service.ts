@@ -6,7 +6,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { McpRegistryService } from '../../nest-mcp';
 import type { User } from '../../types';
 import { ADDON_IDS } from '../../addons';
-import { getMcpSafeUrl } from '../../app-config';
+import { getMcpSafeUrl, readEnv } from '../../app-config';
+import { DatabaseService } from '../database/database.service';
 import { registerTools } from '../../mcp/tools';
 import { sessions, evictOldestSessionForUser } from '../../mcp/sessionManager';
 import { SESSION_TTL_MS, MAX_SESSIONS_PER_USER, KEEPALIVE_MS, isRateLimited } from '../../mcp';
@@ -123,6 +124,7 @@ export class McpTransportService {
     private readonly addons: AddonsService,
     private readonly audit: AuditService,
     private readonly registry: McpRegistryService,
+    private readonly db: DatabaseService,
   ) {}
 
   verifyToken(authHeader: string | undefined): VerifyTokenResult | null {
@@ -164,7 +166,29 @@ export class McpTransportService {
       return;
     }
 
-    const tokenResult = this.verifyToken(req.headers['authorization']);
+    const { disableAuth, authUsername } = readEnv().mcp;
+    // Trusted-network access is for native clients. Browser requests must not
+    // inherit a LAN user's access through open CORS or DNS rebinding.
+    if (disableAuth && req.headers.origin !== undefined) {
+      res.status(403).json({ error: 'Browser origins are not allowed when MCP authentication is disabled' });
+      return;
+    }
+    // Always use the configured identity in trusted-network mode, even when a
+    // client sends stale credentials. Re-load it on every request so deletion
+    // or conversion to a guest also stops existing sessions.
+    const trustedUser = disableAuth && authUsername !== null
+      ? this.db.get<User>(
+        'SELECT id, username, email, role FROM users WHERE username = ? AND is_guest = 0',
+        authUsername,
+      )
+      : undefined;
+    if (disableAuth && !trustedUser) {
+      res.status(503).json({ error: 'MCP_AUTH_USERNAME must identify an existing non-guest user' });
+      return;
+    }
+    const tokenResult = trustedUser
+      ? { user: trustedUser, scopes: null, clientId: null, isStaticToken: false }
+      : this.verifyToken(req.headers['authorization']);
     if (!tokenResult) {
       setAuthChallenge(res);
       res.status(401).json({ error: 'Access token required' });
@@ -184,6 +208,10 @@ export class McpTransportService {
       const session = sessions.get(sessionId);
       if (!session) {
         res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+      if ((session.authDisabled ?? false) !== disableAuth) {
+        res.status(403).json({ error: 'MCP authentication mode changed; initialize a new session' });
         return;
       }
       if (session.userId !== user.id) {
@@ -288,7 +316,7 @@ export class McpTransportService {
           userId: user.id,
           action: 'mcp.tool_call',
           resource: info.name,
-          details: { clientId: clientId ?? 'native' },
+          details: { clientId: clientId ?? 'native', ...(disableAuth ? { authMethod: 'disabled' } : {}) },
           ip,
         });
       } catch (err) {
@@ -301,7 +329,7 @@ export class McpTransportService {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sid) => {
-        sessions.set(sid, { server, transport, userId: user.id, scopes, clientId, isStaticToken, lastActivity: Date.now(), lastClientIp: createIp });
+        sessions.set(sid, { server, transport, userId: user.id, scopes, clientId, isStaticToken, authDisabled: disableAuth, lastActivity: Date.now(), lastClientIp: createIp });
         // The cap was checked before the handler ran, and registration only
         // happens here — so concurrent initializes all passed the same
         // pre-registration count. Re-check now that the entry exists, or the
@@ -313,7 +341,7 @@ export class McpTransportService {
           if (!dropped || dropped === sid) break;
           console.log(`[MCP] Session limit (${MAX_SESSIONS_PER_USER}) exceeded for user ${user.id} — evicted idle session ${dropped}`);
         }
-        const authMethod = isStaticToken ? 'static-token' : scopes ? `oauth(${scopes.join(',')})` : 'jwt';
+        const authMethod = disableAuth ? 'disabled' : isStaticToken ? 'static-token' : scopes ? `oauth(${scopes.join(',')})` : 'jwt';
         console.log(`[MCP] Session ${sid} created for user ${user.id} [${authMethod}]. Active sessions: ${sessions.size}`);
       },
       onsessionclosed: (sid) => {
